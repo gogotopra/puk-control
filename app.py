@@ -4,11 +4,10 @@ import sqlite3
 import json
 from datetime import datetime
 import uuid
-import eventlet
-eventlet.monkey_patch()
+import os
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'kaka-secret-key'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'kaka-secret-key')
 socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=30, ping_interval=10)
 
 # База данных
@@ -52,6 +51,7 @@ def api_send_command():
     if result and result[0]:
         # Отправляем команду через Socket.IO
         socketio.emit('command', {'command': command}, room=result[0])
+        print(f"📨 Команда отправлена {computer_id}: {command}")
         return jsonify({'status': 'queued', 'message': 'Command sent'})
     else:
         return jsonify({'status': 'error', 'message': 'Computer offline'})
@@ -69,11 +69,14 @@ def handle_register(data):
     conn.commit()
     conn.close()
     
+    print(f"✅ Компьютер зарегистрирован: {computer_name} (ID: {computer_id})")
     emit('registered', {'computer_id': computer_id})
 
 # WebSocket: результат от компьютера
 @socketio.on('command_result')
 def handle_command_result(data):
+    print(f"📊 ПОЛУЧЕН РЕЗУЛЬТАТ ОТ {data.get('computer_id')}: {data.get('command')}")
+    
     computer_id = data['computer_id']
     command = data['command']
     result = data['result']
@@ -81,7 +84,8 @@ def handle_command_result(data):
     # Обновляем время последнего обращения
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    c.execute("UPDATE computers SET last_seen=? WHERE id=?", (datetime.now(), computer_id))
+    c.execute("UPDATE computers SET last_seen=?, status='online' WHERE id=?", 
+              (datetime.now(), computer_id))
     conn.commit()
     conn.close()
     
@@ -91,6 +95,7 @@ def handle_command_result(data):
         'command': command,
         'result': result
     })
+    print(f"✅ Результат отправлен в браузер")
 
 # WebSocket: отключение компьютера
 @socketio.on('disconnect')
@@ -100,6 +105,7 @@ def handle_disconnect():
     c.execute("UPDATE computers SET status='offline' WHERE sid=?", (request.sid,))
     conn.commit()
     conn.close()
+    print(f"🔌 Компьютер отключен (SID: {request.sid})")
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000)

@@ -1,8 +1,9 @@
 # ==============================================
 # ЭТО ДОЛЖНО БЫТЬ В САМОМ НАЧАЛЕ ФАЙЛА!
 # ==============================================
-import eventlet
-eventlet.monkey_patch()  # ДОЛЖНО БЫТЬ ПЕРВЫМ!
+import gevent
+from gevent import monkey
+monkey.patch_all()  # ДОЛЖНО БЫТЬ ПЕРВЫМ!
 # ==============================================
 
 from flask import Flask, render_template, request, jsonify

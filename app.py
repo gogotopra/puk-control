@@ -1,3 +1,10 @@
+# ==============================================
+# ЭТО ДОЛЖНО БЫТЬ В САМОМ НАЧАЛЕ ФАЙЛА!
+# ==============================================
+import eventlet
+eventlet.monkey_patch()  # ДОЛЖНО БЫТЬ ПЕРВЫМ!
+# ==============================================
+
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 import sqlite3
@@ -49,7 +56,6 @@ def api_send_command():
     conn.close()
     
     if result and result[0]:
-        # Отправляем команду через Socket.IO
         socketio.emit('command', {'command': command}, room=result[0])
         print(f"📨 Команда отправлена {computer_id}: {command}")
         return jsonify({'status': 'queued', 'message': 'Command sent'})
@@ -81,7 +87,6 @@ def handle_command_result(data):
     command = data['command']
     result = data['result']
     
-    # Обновляем время последнего обращения
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
     c.execute("UPDATE computers SET last_seen=?, status='online' WHERE id=?", 
@@ -89,7 +94,6 @@ def handle_command_result(data):
     conn.commit()
     conn.close()
     
-    # Отправляем результат в браузер
     socketio.emit('command_done', {
         'computer_id': computer_id,
         'command': command,

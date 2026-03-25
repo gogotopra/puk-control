@@ -112,5 +112,20 @@ def handle_disconnect():
     conn.close()
     print(f"🔌 Компьютер отключен (SID: {request.sid})")
 
+@socketio.on('register_with_id')
+def handle_register_with_id(data):
+    computer_name = data.get('name', 'Unknown')
+    computer_id = data.get('computer_id')
+    
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO computers (id, name, last_seen, status, sid) VALUES (?, ?, ?, ?, ?)",
+              (computer_id, computer_name, datetime.now(), 'online', request.sid))
+    conn.commit()
+    conn.close()
+    
+    print(f"✅ Компьютер переподключен: {computer_name} (ID: {computer_id})")
+    emit('registered', {'computer_id': computer_id})
+
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000)

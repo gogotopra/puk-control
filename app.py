@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 import sqlite3
 import json
@@ -20,7 +20,7 @@ def init_db():
                   name TEXT,
                   last_seen TIMESTAMP,
                   status TEXT,
-                  sid TEXT)''')  # добавили session id
+                  sid TEXT)''')
     conn.commit()
     conn.close()
 
@@ -34,6 +34,27 @@ def index():
     computers = c.execute("SELECT id, name, last_seen, status FROM computers ORDER BY last_seen DESC").fetchall()
     conn.close()
     return render_template('index.html', computers=computers)
+
+# REST API для отправки команд
+@app.route('/api/send_command', methods=['POST'])
+def api_send_command():
+    computer_id = request.form.get('computer_id')
+    command = request.form.get('command')
+    
+    if not computer_id or not command:
+        return jsonify({'status': 'error', 'message': 'Missing parameters'})
+    
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    result = c.execute("SELECT sid FROM computers WHERE id=?", (computer_id,)).fetchone()
+    conn.close()
+    
+    if result and result[0]:
+        # Отправляем команду через Socket.IO
+        socketio.emit('command', {'command': command}, room=result[0])
+        return jsonify({'status': 'queued', 'message': 'Command sent'})
+    else:
+        return jsonify({'status': 'error', 'message': 'Computer offline'})
 
 # WebSocket: регистрация компьютера
 @socketio.on('register')
@@ -50,25 +71,6 @@ def handle_register(data):
     
     emit('registered', {'computer_id': computer_id})
 
-# WebSocket: получение команд от браузера
-@socketio.on('send_command')
-def handle_send_command(data):
-    computer_id = data['computer_id']
-    command = data['command']
-    
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    # Получаем session id компьютера
-    result = c.execute("SELECT sid FROM computers WHERE id=?", (computer_id,)).fetchone()
-    conn.close()
-    
-    if result and result[0]:
-        # Отправляем команду конкретному компьютеру
-        socketio.emit('command', {'command': command}, room=result[0])
-        emit('command_sent', {'status': 'ok'})
-    else:
-        emit('command_sent', {'status': 'error', 'message': 'Computer offline'})
-
 # WebSocket: результат от компьютера
 @socketio.on('command_result')
 def handle_command_result(data):
@@ -76,7 +78,14 @@ def handle_command_result(data):
     command = data['command']
     result = data['result']
     
-    # Можно сохранить в БД или отправить в браузер
+    # Обновляем время последнего обращения
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute("UPDATE computers SET last_seen=? WHERE id=?", (datetime.now(), computer_id))
+    conn.commit()
+    conn.close()
+    
+    # Отправляем результат в браузер
     socketio.emit('command_done', {
         'computer_id': computer_id,
         'command': command,

